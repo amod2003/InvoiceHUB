@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.core.database import connect_db, disconnect_db, get_database
-from app.routers import auth, clients, invoices, payments, dashboard
+from app.routers import auth, clients, invoices, payments, dashboard, tenants
 from app.services.invoice_service import process_recurring_invoices
 
 scheduler = AsyncIOScheduler()
@@ -46,3 +46,4 @@ app.include_router(clients.router, prefix="/api/v1")
 app.include_router(invoices.router, prefix="/api/v1")
 app.include_router(payments.router, prefix="/api/v1")
 app.include_router(dashboard.router, prefix="/api/v1")
+app.include_router(tenants.router, prefix="/api/v1")
