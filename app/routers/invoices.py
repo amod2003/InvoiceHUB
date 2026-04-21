@@ -15,6 +15,7 @@ from app.services.invoice_service import (
     mark_paid,
 )
 from app.services.pdf_service import generate_invoice_pdf
+from app.services.email_service import send_invoice_email, send_reminder_email
 
 router = APIRouter(prefix="/invoices", tags=["Invoices"])
 
@@ -180,6 +181,50 @@ async def mark_invoice_paid(
     if not doc:
         raise HTTPException(status_code=404, detail="Invoice not found")
     return _invoice_out(doc)
+
+
+@router.post("/{invoice_id}/send", status_code=status.HTTP_200_OK)
+async def send_invoice(
+    invoice_id: str,
+    current: dict = Depends(get_current_user),
+    db=Depends(get_database),
+):
+    doc = await db.invoices.find_one(
+        {"_id": ObjectId(invoice_id), "tenant_id": ObjectId(current["tenant_id"])}
+    )
+    if not doc:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    client = await db.clients.find_one({"_id": doc["client_id"]})
+    tenant = await db.tenants.find_one({"_id": ObjectId(current["tenant_id"])})
+    await send_invoice_email(doc, client or {}, tenant or {})
+    await db.invoices.update_one(
+        {"_id": ObjectId(invoice_id)},
+        {"$set": {"status": InvoiceStatus.sent, "updated_at": datetime.now(timezone.utc)}},
+    )
+    return {"detail": "Invoice sent successfully"}
+
+
+@router.post("/{invoice_id}/remind", status_code=status.HTTP_200_OK)
+async def send_reminder(
+    invoice_id: str,
+    current: dict = Depends(get_current_user),
+    db=Depends(get_database),
+):
+    doc = await db.invoices.find_one(
+        {"_id": ObjectId(invoice_id), "tenant_id": ObjectId(current["tenant_id"])}
+    )
+    if not doc:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    if doc["status"] != InvoiceStatus.overdue:
+        raise HTTPException(status_code=400, detail="Reminders can only be sent for overdue invoices")
+    client = await db.clients.find_one({"_id": doc["client_id"]})
+    tenant = await db.tenants.find_one({"_id": ObjectId(current["tenant_id"])})
+    await send_reminder_email(doc, client or {}, tenant or {})
+    await db.invoices.update_one(
+        {"_id": ObjectId(invoice_id)},
+        {"$set": {"reminder_sent_at": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)}},
+    )
+    return {"detail": "Reminder sent successfully"}
 
 
 @router.get("/{invoice_id}/pdf")
