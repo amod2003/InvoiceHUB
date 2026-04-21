@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from bson import ObjectId
+from bson.errors import InvalidId
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 
@@ -18,6 +19,13 @@ from app.services.pdf_service import generate_invoice_pdf
 from app.services.email_service import send_invoice_email, send_reminder_email
 
 router = APIRouter(prefix="/invoices", tags=["Invoices"])
+
+
+def _to_object_id(value: str, field: str = "id") -> ObjectId:
+    try:
+        return ObjectId(value)
+    except (InvalidId, TypeError):
+        raise HTTPException(status_code=400, detail=f"Invalid {field}: '{value}' is not a valid ID")
 
 
 def _invoice_out(doc: dict) -> InvoiceOut:
@@ -57,11 +65,11 @@ async def list_invoices(
     current: dict = Depends(get_current_user),
     db=Depends(get_database),
 ):
-    query: dict = {"tenant_id": ObjectId(current["tenant_id"])}
+    query: dict = {"tenant_id": _to_object_id(current["tenant_id"], "tenant_id")}
     if status_filter:
         query["status"] = status_filter
     if client_id:
-        query["client_id"] = ObjectId(client_id)
+        query["client_id"] = _to_object_id(client_id, "client_id")
     if from_date or to_date:
         query["issue_date"] = {}
         if from_date:
@@ -79,7 +87,7 @@ async def create_invoice(
     db=Depends(get_database),
 ):
     client = await db.clients.find_one(
-        {"_id": ObjectId(payload.client_id), "tenant_id": ObjectId(current["tenant_id"])}
+        {"_id": _to_object_id(payload.client_id, "client_id"), "tenant_id": _to_object_id(current["tenant_id"], "tenant_id")}
     )
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
@@ -87,8 +95,8 @@ async def create_invoice(
     totals = calculate_totals(payload.line_items, payload.discount)
     now = datetime.now(timezone.utc)
     doc = {
-        "tenant_id": ObjectId(current["tenant_id"]),
-        "client_id": ObjectId(payload.client_id),
+        "tenant_id": _to_object_id(current["tenant_id"], "tenant_id"),
+        "client_id": _to_object_id(payload.client_id, "client_id"),
         "invoice_number": await generate_invoice_number(db, current["tenant_id"]),
         "status": InvoiceStatus.draft,
         "issue_date": payload.issue_date,
@@ -120,7 +128,7 @@ async def get_invoice(
     db=Depends(get_database),
 ):
     doc = await db.invoices.find_one(
-        {"_id": ObjectId(invoice_id), "tenant_id": ObjectId(current["tenant_id"])}
+        {"_id": _to_object_id(invoice_id), "tenant_id": _to_object_id(current["tenant_id"], "tenant_id")}
     )
     if not doc:
         raise HTTPException(status_code=404, detail="Invoice not found")
@@ -135,7 +143,7 @@ async def update_invoice(
     db=Depends(get_database),
 ):
     doc = await db.invoices.find_one(
-        {"_id": ObjectId(invoice_id), "tenant_id": ObjectId(current["tenant_id"])}
+        {"_id": _to_object_id(invoice_id), "tenant_id": _to_object_id(current["tenant_id"], "tenant_id")}
     )
     if not doc:
         raise HTTPException(status_code=404, detail="Invoice not found")
@@ -150,7 +158,7 @@ async def update_invoice(
     updates["updated_at"] = datetime.now(timezone.utc)
 
     result = await db.invoices.find_one_and_update(
-        {"_id": ObjectId(invoice_id)}, {"$set": updates}, return_document=True
+        {"_id": _to_object_id(invoice_id)}, {"$set": updates}, return_document=True
     )
     return _invoice_out(result)
 
@@ -162,13 +170,13 @@ async def delete_invoice(
     db=Depends(get_database),
 ):
     doc = await db.invoices.find_one(
-        {"_id": ObjectId(invoice_id), "tenant_id": ObjectId(current["tenant_id"])}
+        {"_id": _to_object_id(invoice_id), "tenant_id": _to_object_id(current["tenant_id"], "tenant_id")}
     )
     if not doc:
         raise HTTPException(status_code=404, detail="Invoice not found")
     if doc["status"] != InvoiceStatus.draft:
         raise HTTPException(status_code=400, detail="Only draft invoices can be deleted")
-    await db.invoices.delete_one({"_id": ObjectId(invoice_id)})
+    await db.invoices.delete_one({"_id": _to_object_id(invoice_id)})
 
 
 @router.post("/{invoice_id}/mark-paid", response_model=InvoiceOut)
@@ -190,15 +198,15 @@ async def send_invoice(
     db=Depends(get_database),
 ):
     doc = await db.invoices.find_one(
-        {"_id": ObjectId(invoice_id), "tenant_id": ObjectId(current["tenant_id"])}
+        {"_id": _to_object_id(invoice_id), "tenant_id": _to_object_id(current["tenant_id"], "tenant_id")}
     )
     if not doc:
         raise HTTPException(status_code=404, detail="Invoice not found")
     client = await db.clients.find_one({"_id": doc["client_id"]})
-    tenant = await db.tenants.find_one({"_id": ObjectId(current["tenant_id"])})
+    tenant = await db.tenants.find_one({"_id": _to_object_id(current["tenant_id"], "tenant_id")})
     await send_invoice_email(doc, client or {}, tenant or {})
     await db.invoices.update_one(
-        {"_id": ObjectId(invoice_id)},
+        {"_id": _to_object_id(invoice_id)},
         {"$set": {"status": InvoiceStatus.sent, "updated_at": datetime.now(timezone.utc)}},
     )
     return {"detail": "Invoice sent successfully"}
@@ -211,17 +219,17 @@ async def send_reminder(
     db=Depends(get_database),
 ):
     doc = await db.invoices.find_one(
-        {"_id": ObjectId(invoice_id), "tenant_id": ObjectId(current["tenant_id"])}
+        {"_id": _to_object_id(invoice_id), "tenant_id": _to_object_id(current["tenant_id"], "tenant_id")}
     )
     if not doc:
         raise HTTPException(status_code=404, detail="Invoice not found")
     if doc["status"] != InvoiceStatus.overdue:
         raise HTTPException(status_code=400, detail="Reminders can only be sent for overdue invoices")
     client = await db.clients.find_one({"_id": doc["client_id"]})
-    tenant = await db.tenants.find_one({"_id": ObjectId(current["tenant_id"])})
+    tenant = await db.tenants.find_one({"_id": _to_object_id(current["tenant_id"], "tenant_id")})
     await send_reminder_email(doc, client or {}, tenant or {})
     await db.invoices.update_one(
-        {"_id": ObjectId(invoice_id)},
+        {"_id": _to_object_id(invoice_id)},
         {"$set": {"reminder_sent_at": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)}},
     )
     return {"detail": "Reminder sent successfully"}
@@ -234,11 +242,11 @@ async def download_invoice_pdf(
     db=Depends(get_database),
 ):
     doc = await db.invoices.find_one(
-        {"_id": ObjectId(invoice_id), "tenant_id": ObjectId(current["tenant_id"])}
+        {"_id": _to_object_id(invoice_id), "tenant_id": _to_object_id(current["tenant_id"], "tenant_id")}
     )
     if not doc:
         raise HTTPException(status_code=404, detail="Invoice not found")
-    tenant = await db.tenants.find_one({"_id": ObjectId(current["tenant_id"])})
+    tenant = await db.tenants.find_one({"_id": _to_object_id(current["tenant_id"], "tenant_id")})
     pdf_buffer = generate_invoice_pdf(doc, tenant or {})
     filename = f"{doc['invoice_number']}.pdf"
     return StreamingResponse(
@@ -255,7 +263,7 @@ async def duplicate_invoice_endpoint(
     db=Depends(get_database),
 ):
     doc = await db.invoices.find_one(
-        {"_id": ObjectId(invoice_id), "tenant_id": ObjectId(current["tenant_id"])}
+        {"_id": _to_object_id(invoice_id), "tenant_id": _to_object_id(current["tenant_id"], "tenant_id")}
     )
     if not doc:
         raise HTTPException(status_code=404, detail="Invoice not found")
