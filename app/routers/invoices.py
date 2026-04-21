@@ -3,6 +3,7 @@ from typing import Optional
 
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 
 from app.core.database import get_database
 from app.middleware.tenant_middleware import get_current_user
@@ -13,6 +14,7 @@ from app.services.invoice_service import (
     generate_invoice_number,
     mark_paid,
 )
+from app.services.pdf_service import generate_invoice_pdf
 
 router = APIRouter(prefix="/invoices", tags=["Invoices"])
 
@@ -178,6 +180,27 @@ async def mark_invoice_paid(
     if not doc:
         raise HTTPException(status_code=404, detail="Invoice not found")
     return _invoice_out(doc)
+
+
+@router.get("/{invoice_id}/pdf")
+async def download_invoice_pdf(
+    invoice_id: str,
+    current: dict = Depends(get_current_user),
+    db=Depends(get_database),
+):
+    doc = await db.invoices.find_one(
+        {"_id": ObjectId(invoice_id), "tenant_id": ObjectId(current["tenant_id"])}
+    )
+    if not doc:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    tenant = await db.tenants.find_one({"_id": ObjectId(current["tenant_id"])})
+    pdf_buffer = generate_invoice_pdf(doc, tenant or {})
+    filename = f"{doc['invoice_number']}.pdf"
+    return StreamingResponse(
+        pdf_buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post("/{invoice_id}/duplicate", response_model=InvoiceOut, status_code=status.HTTP_201_CREATED)
