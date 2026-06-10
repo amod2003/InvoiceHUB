@@ -15,6 +15,22 @@ from app.core.config import settings
 from app.services.pdf_service import generate_invoice_pdf
 
 
+def _is_configured() -> bool:
+    key = settings.SENDGRID_API_KEY or ""
+    # Treat empty or placeholder keys (e.g. "SG.xxxxxxxxxxxx") as "not configured"
+    return bool(key) and "xxxx" not in key
+
+
+def _send_or_skip(message: Mail, kind: str) -> None:
+    if not _is_configured():
+        print(f"[email skipped — SendGrid not configured] {kind}")
+        return
+    try:
+        SendGridAPIClient(settings.SENDGRID_API_KEY).send(message)
+    except Exception as exc:
+        print(f"[email send failed — continuing] {kind}: {exc}")
+
+
 async def send_invoice_email(invoice: dict, client: dict, tenant: dict) -> None:
     pdf_buffer = generate_invoice_pdf(invoice, tenant)
     pdf_bytes = pdf_buffer.read()
@@ -35,8 +51,7 @@ async def send_invoice_email(invoice: dict, client: dict, tenant: dict) -> None:
     )
     message.attachment = attachment
 
-    sg = SendGridAPIClient(settings.SENDGRID_API_KEY)
-    sg.send(message)
+    _send_or_skip(message, "invoice")
 
 
 async def send_reminder_email(invoice: dict, client: dict, tenant: dict) -> None:
@@ -46,8 +61,7 @@ async def send_reminder_email(invoice: dict, client: dict, tenant: dict) -> None
         subject=f"Payment Reminder: Invoice {invoice['invoice_number']} is Overdue",
         html_content=_reminder_email_html(invoice, tenant),
     )
-    sg = SendGridAPIClient(settings.SENDGRID_API_KEY)
-    sg.send(message)
+    _send_or_skip(message, "reminder")
 
 
 def _invoice_email_html(invoice: dict, tenant: dict) -> str:
