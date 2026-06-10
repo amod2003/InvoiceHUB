@@ -17,6 +17,19 @@ class TenantCreate(BaseModel):
     slug: Optional[str] = None
 
 
+class TenantSettingsUpdate(BaseModel):
+    currency: Optional[str] = None
+    tax_rate: Optional[float] = None
+    logo_url: Optional[str] = None
+    invoice_prefix: Optional[str] = None
+    payment_terms: Optional[int] = None
+
+
+class TenantUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=2, max_length=100)
+    settings: Optional[TenantSettingsUpdate] = None
+
+
 class TenantOut(BaseModel):
     id: str
     name: str
