@@ -26,9 +26,11 @@ def _send_or_skip(message: Mail, kind: str) -> None:
         print(f"[email skipped — SendGrid not configured] {kind}")
         return
     try:
-        SendGridAPIClient(settings.SENDGRID_API_KEY).send(message)
+        response = SendGridAPIClient(settings.SENDGRID_API_KEY).send(message)
+        print(f"[email sent] {kind} — status: {response.status_code}")
     except Exception as exc:
-        print(f"[email send failed — continuing] {kind}: {exc}")
+        print(f"[email send failed] {kind}: {exc}")
+        raise
 
 
 async def send_invoice_email(invoice: dict, client: dict, tenant: dict) -> None:
