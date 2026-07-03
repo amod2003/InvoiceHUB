@@ -11,6 +11,7 @@ from reportlab.platypus import (
     TableStyle,
     Paragraph,
     Spacer,
+    HRFlowable,
 )
 
 
@@ -111,6 +112,18 @@ def generate_invoice_pdf(invoice: dict, tenant: dict) -> BytesIO:
     if invoice.get("terms"):
         story.append(Spacer(1, 3 * mm))
         story.append(Paragraph("<b>Terms:</b> " + invoice["terms"], styles["Normal"]))
+
+    if invoice.get("payment_link"):
+        story.append(Spacer(1, 8 * mm))
+        story.append(HRFlowable(width="100%", thickness=0.5, color=colors.lightgrey))
+        story.append(Spacer(1, 4 * mm))
+        link_style = ParagraphStyle("Link", fontSize=10, textColor=navy)
+        story.append(Paragraph("<b>Pay Online:</b>", link_style))
+        story.append(Spacer(1, 2 * mm))
+        story.append(Paragraph(
+            f'<a href="{invoice["payment_link"]}" color="#1e3a5f">{invoice["payment_link"]}</a>',
+            styles["Normal"],
+        ))
 
     doc.build(story)
     buffer.seek(0)

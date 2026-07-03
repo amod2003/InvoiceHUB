@@ -19,8 +19,8 @@ class Settings(BaseSettings):
     STRIPE_WEBHOOK_SECRET: str = ""
     STRIPE_PUBLISHABLE_KEY: str = ""
 
-    SENDGRID_API_KEY: str = ""
-    FROM_EMAIL: str = "noreply@invoicehub.com"
+    RESEND_API_KEY: str = ""
+    FROM_EMAIL: str = "onboarding@resend.dev"
 
     AWS_ACCESS_KEY_ID: str = ""
     AWS_SECRET_ACCESS_KEY: str = ""
@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     AWS_REGION: str = "ap-south-1"
 
     ALLOWED_ORIGINS: str = "http://localhost:5173"
+
+    REDIS_URL: str = "redis://localhost:6379"
 
 
 settings = Settings()

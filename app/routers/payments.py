@@ -1,3 +1,5 @@
+import json
+import traceback
 from datetime import datetime, timezone
 
 import stripe
@@ -53,35 +55,60 @@ async def stripe_webhook(request: Request, db=Depends(get_database)):
     payload = await request.body()
     sig_header = request.headers.get("stripe-signature", "")
     try:
-        event = verify_webhook_signature(payload, sig_header)
-    except stripe.error.SignatureVerificationError:
+        verify_webhook_signature(payload, sig_header)
+    except stripe.SignatureVerificationError:
         raise HTTPException(status_code=400, detail="Invalid webhook signature")
 
-    if event["type"] == "checkout.session.completed":
-        session = event["data"]["object"]
-        invoice_id = session.get("metadata", {}).get("invoice_id")
-        tenant_id = session.get("metadata", {}).get("tenant_id")
-        if invoice_id and tenant_id:
-            now = datetime.now(timezone.utc)
-            invoice = await db.invoices.find_one_and_update(
-                {"_id": ObjectId(invoice_id), "tenant_id": ObjectId(tenant_id)},
-                {"$set": {"status": "paid", "paid_at": now, "updated_at": now}},
-                return_document=True,
-            )
-            if invoice:
-                payment_doc = {
-                    "tenant_id": ObjectId(tenant_id),
-                    "invoice_id": ObjectId(invoice_id),
-                    "client_id": invoice["client_id"],
-                    "amount": invoice["total"],
-                    "currency": invoice.get("currency", "USD"),
-                    "method": PaymentMethod.stripe,
-                    "stripe_payment_id": session.get("payment_intent"),
-                    "status": PaymentStatus.completed,
-                    "paid_at": now,
-                    "created_at": now,
-                }
-                await db.payments.insert_one(payment_doc)
+    # Use raw JSON — Stripe SDK v5 returns StripeObjects that don't support .get()
+    event = json.loads(payload)
+
+    try:
+        if event["type"] == "checkout.session.completed":
+            session = event["data"]["object"]
+            metadata = session.get("metadata") or {}
+            invoice_id = metadata.get("invoice_id")
+            tenant_id = metadata.get("tenant_id")
+            print(f"[webhook] session metadata: invoice_id={invoice_id} tenant_id={tenant_id}")
+            if not invoice_id and session.get("payment_link"):
+                print(f"[webhook] fetching payment link: {session['payment_link']}")
+                pl = stripe.PaymentLink.retrieve(session["payment_link"])
+                try:
+                    pl_meta = pl["metadata"] or {}
+                    invoice_id = pl_meta["invoice_id"]
+                    tenant_id = pl_meta["tenant_id"]
+                except (KeyError, TypeError):
+                    invoice_id = None
+                    tenant_id = None
+                print(f"[webhook] payment link metadata: invoice_id={invoice_id} tenant_id={tenant_id}")
+            if invoice_id and tenant_id:
+                now = datetime.now(timezone.utc)
+                invoice = await db.invoices.find_one_and_update(
+                    {"_id": ObjectId(invoice_id), "tenant_id": ObjectId(tenant_id)},
+                    {"$set": {"status": "paid", "paid_at": now, "updated_at": now}},
+                    return_document=True,
+                )
+                print(f"[webhook] invoice updated: {invoice is not None}")
+                if invoice:
+                    payment_doc = {
+                        "tenant_id": ObjectId(tenant_id),
+                        "invoice_id": ObjectId(invoice_id),
+                        "client_id": invoice["client_id"],
+                        "amount": invoice["total"],
+                        "currency": invoice.get("currency", "USD"),
+                        "method": PaymentMethod.stripe,
+                        "stripe_payment_id": session.get("payment_intent"),
+                        "status": PaymentStatus.completed,
+                        "paid_at": now,
+                        "created_at": now,
+                    }
+                    await db.payments.insert_one(payment_doc)
+                    print(f"[webhook] payment record created")
+            else:
+                print(f"[webhook] ERROR: missing invoice_id or tenant_id — cannot update invoice")
+    except Exception as exc:
+        print(f"[webhook] EXCEPTION: {exc}")
+        traceback.print_exc()
+        raise
     return {"received": True}
 
 

@@ -17,6 +17,7 @@ from app.services.invoice_service import (
 )
 from app.services.pdf_service import generate_invoice_pdf
 from app.services.email_service import send_invoice_email, send_reminder_email
+from app.services.stripe_service import create_payment_link
 
 router = APIRouter(prefix="/invoices", tags=["Invoices"])
 
@@ -204,6 +205,19 @@ async def send_invoice(
         raise HTTPException(status_code=404, detail="Invoice not found")
     client = await db.clients.find_one({"_id": doc["client_id"]})
     tenant = await db.tenants.find_one({"_id": _to_object_id(current["tenant_id"], "tenant_id")})
+
+    # Auto-generate payment link if not already present
+    if not doc.get("payment_link"):
+        try:
+            link_url = await create_payment_link(doc, tenant or {})
+            await db.invoices.update_one(
+                {"_id": _to_object_id(invoice_id)},
+                {"$set": {"payment_link": link_url, "updated_at": datetime.now(timezone.utc)}},
+            )
+            doc["payment_link"] = link_url
+        except Exception:
+            pass  # Don't block email if Stripe is unavailable
+
     await send_invoice_email(doc, client or {}, tenant or {})
     await db.invoices.update_one(
         {"_id": _to_object_id(invoice_id)},

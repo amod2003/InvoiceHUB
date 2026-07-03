@@ -2,7 +2,7 @@ import re
 from datetime import datetime, timezone
 
 from bson import ObjectId
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.core.database import get_database
 from app.core.security import (
@@ -12,6 +12,8 @@ from app.core.security import (
     verify_password,
     verify_token,
 )
+from app.core.config import settings
+from app.core.redis import blacklist_token, check_rate_limit
 from app.middleware.tenant_middleware import get_current_user
 from app.models.user import (
     RefreshRequest,
@@ -85,7 +87,8 @@ async def register(payload: RegisterRequest, db=Depends(get_database)):
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(payload: UserLogin, db=Depends(get_database)):
+async def login(payload: UserLogin, request: Request, db=Depends(get_database)):
+    await check_rate_limit(f"login:{request.client.host}", limit=5, window=60)
     user = await db.users.find_one({"email": payload.email})
     if not user or not verify_password(payload.password, user["hashed_password"]):
         raise HTTPException(status_code=401, detail="Invalid email or password")
@@ -116,8 +119,10 @@ async def refresh_token(payload: RefreshRequest):
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-async def logout():
-    # Stateless JWT — client must discard tokens
+async def logout(current: dict = Depends(get_current_user)):
+    token_key = f"{current['user_id']}:{current['tenant_id']}"
+    ttl = settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+    await blacklist_token(token_key, ttl)
     return
 
 
