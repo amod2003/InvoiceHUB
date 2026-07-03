@@ -6,9 +6,14 @@ _client: AsyncIOMotorClient | None = None
 
 async def connect_db():
     global _client
+    print(f"[db] connecting to MongoDB...")
     _client = AsyncIOMotorClient(settings.MONGODB_URL)
     db = _client[settings.DATABASE_NAME]
-    await _create_indexes(db)
+    try:
+        await _create_indexes(db)
+        print("[db] connected and indexes created")
+    except Exception as exc:
+        print(f"[db] index creation failed (continuing): {exc}")
 
 
 async def disconnect_db():
