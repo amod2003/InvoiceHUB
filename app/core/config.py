@@ -20,7 +20,8 @@ class Settings(BaseSettings):
     STRIPE_PUBLISHABLE_KEY: str = ""
 
     RESEND_API_KEY: str = ""
-    FROM_EMAIL: str = "onboarding@resend.dev"
+    GMAIL_APP_PASSWORD: str = ""
+    FROM_EMAIL: str = ""
 
     AWS_ACCESS_KEY_ID: str = ""
     AWS_SECRET_ACCESS_KEY: str = ""
