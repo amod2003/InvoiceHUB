@@ -45,11 +45,28 @@ async def duplicate_invoice(db: AsyncIOMotorDatabase, invoice_doc: dict, tenant_
 
 async def mark_paid(db: AsyncIOMotorDatabase, invoice_id: str, tenant_id: str) -> dict | None:
     now = datetime.now(timezone.utc)
-    return await db.invoices.find_one_and_update(
+    invoice = await db.invoices.find_one_and_update(
         {"_id": ObjectId(invoice_id), "tenant_id": ObjectId(tenant_id)},
         {"$set": {"status": InvoiceStatus.paid, "paid_at": now, "updated_at": now}},
         return_document=True,
     )
+    if invoice:
+        # Create a payment record so it appears on the Payments page
+        existing = await db.payments.find_one({"invoice_id": ObjectId(invoice_id)})
+        if not existing:
+            await db.payments.insert_one({
+                "tenant_id": ObjectId(tenant_id),
+                "invoice_id": ObjectId(invoice_id),
+                "client_id": invoice.get("client_id"),
+                "amount": invoice.get("total", 0),
+                "currency": invoice.get("currency", "INR"),
+                "method": "manual",
+                "stripe_payment_id": None,
+                "status": "completed",
+                "paid_at": now,
+                "created_at": now,
+            })
+    return invoice
 
 
 async def process_recurring_invoices(db: AsyncIOMotorDatabase):
