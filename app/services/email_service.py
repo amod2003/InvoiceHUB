@@ -1,59 +1,72 @@
 import base64
 
-import resend
+import httpx
 
 from app.core.config import settings
 from app.services.pdf_service import generate_invoice_pdf
 
+_MAILJET_URL = "https://api.mailjet.com/v3.1/send"
+
 
 def _is_configured() -> bool:
-    return bool(settings.RESEND_API_KEY)
+    return bool(settings.MAILJET_API_KEY) and bool(settings.MAILJET_SECRET_KEY)
 
 
 async def send_invoice_email(invoice: dict, client: dict, tenant: dict) -> None:
     if not _is_configured():
-        print("[email skipped — Resend not configured]")
+        print("[email skipped — Mailjet not configured]")
         return
-    resend.api_key = settings.RESEND_API_KEY
     pdf_buffer = generate_invoice_pdf(invoice, tenant)
     pdf_bytes = pdf_buffer.read()
-    params: resend.Emails.SendParams = {
-        "from": f"{tenant.get('name', 'InvoiceHub')} <onboarding@resend.dev>",
-        "to": [client["email"]],
-        "subject": f"Invoice {invoice['invoice_number']} from {tenant.get('name', '')}",
-        "html": _invoice_email_html(invoice, tenant, invoice.get("payment_link")),
-        "attachments": [
+    payload = {
+        "Messages": [
             {
-                "filename": f"{invoice['invoice_number']}.pdf",
-                "content": base64.b64encode(pdf_bytes).decode(),
+                "From": {"Email": settings.FROM_EMAIL, "Name": tenant.get("name", "InvoiceHub")},
+                "To": [{"Email": client["email"]}],
+                "Subject": f"Invoice {invoice['invoice_number']} from {tenant.get('name', '')}",
+                "HTMLPart": _invoice_email_html(invoice, tenant, invoice.get("payment_link")),
+                "Attachments": [
+                    {
+                        "ContentType": "application/pdf",
+                        "Filename": f"{invoice['invoice_number']}.pdf",
+                        "Base64Content": base64.b64encode(pdf_bytes).decode(),
+                    }
+                ],
             }
-        ],
+        ]
     }
-    try:
-        resend.Emails.send(params)
-        print(f"[email sent] to {client['email']}")
-    except Exception as exc:
-        print(f"[email send failed] {exc}")
-        raise
+    await _send(payload, client["email"])
 
 
 async def send_reminder_email(invoice: dict, client: dict, tenant: dict) -> None:
     if not _is_configured():
-        print("[email skipped — Resend not configured]")
+        print("[email skipped — Mailjet not configured]")
         return
-    resend.api_key = settings.RESEND_API_KEY
-    params: resend.Emails.SendParams = {
-        "from": f"{tenant.get('name', 'InvoiceHub')} <onboarding@resend.dev>",
-        "to": [client["email"]],
-        "subject": f"Payment Reminder: Invoice {invoice['invoice_number']} is Overdue",
-        "html": _reminder_email_html(invoice, tenant),
+    payload = {
+        "Messages": [
+            {
+                "From": {"Email": settings.FROM_EMAIL, "Name": tenant.get("name", "InvoiceHub")},
+                "To": [{"Email": client["email"]}],
+                "Subject": f"Payment Reminder: Invoice {invoice['invoice_number']} is Overdue",
+                "HTMLPart": _reminder_email_html(invoice, tenant),
+            }
+        ]
     }
-    try:
-        resend.Emails.send(params)
-        print(f"[reminder sent] to {client['email']}")
-    except Exception as exc:
-        print(f"[reminder send failed] {exc}")
-        raise
+    await _send(payload, client["email"])
+
+
+async def _send(payload: dict, to_email: str) -> None:
+    async with httpx.AsyncClient() as client:
+        resp = client.post(
+            _MAILJET_URL,
+            json=payload,
+            auth=(settings.MAILJET_API_KEY, settings.MAILJET_SECRET_KEY),
+            timeout=15,
+        )
+    if resp.status_code >= 400:
+        print(f"[email send failed] {resp.status_code} {resp.text}")
+        raise RuntimeError(f"Mailjet error {resp.status_code}: {resp.text}")
+    print(f"[email sent] to {to_email}")
 
 
 def _invoice_email_html(invoice: dict, tenant: dict, payment_link: str = None) -> str:
